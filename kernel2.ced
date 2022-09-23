@@ -1,0 +1,432 @@
+;******************************************************************************
+;
+;	CESAR16i Kernel
+;	Leonardo Azzi Martins, 2022/2
+;
+;******************************************************************************
+;
+;	-> Áreas de memória:
+;
+;	0000 - 7FFF		_KERNEL
+;					Área de Kernel para implementaçãoo dos alunos
+;
+;	0100 - 01FF		_VETTAB
+;					Tabela com os vetores das funções do kernel
+;					*** CUIDADO! Esse vetor est� no meio da �rea de c�digo ***
+;
+;	8000 - FF7F		_APP
+;					�rea onde ser� colocado o programa de aplica��o.
+;					Esse programa vai fazer o acesso aos perif�ricos e interrup��es, atrav�s das fun��es do Kernel.
+;
+;	FF80 - FFBF 	_IOAREA16
+;					Area de perifericos, acessada na base 16 bits
+;
+;	FFC0 - FFFF		_IOAREA08
+;					Area de perifericos, acessada na base 8 bits
+;					
+;******************************************************************************
+
+
+_KERNEL:	equ	h0000
+_VETTAB:	equ	h0100
+_RESET:		equ	_VETTAB+H0100
+_APP:		equ	h8000
+_IOAREA16:	equ	hFF80
+_IOAREA08:	equ	hFFC0
+
+
+;
+;------------------------------------------------------------------------------
+;	�rea reservada para os perif�ricos
+;------------------------------------------------------------------------------
+
+; Acesso em 16 bits
+org		_IOAREA16
+daw		[31]
+IVET:	        dw		0	; Vetor de interrupção
+
+; Acesso em 8 bits
+org		_IOAREA08
+dab		[23]
+TIMDT:	        db		0	; Registro de programação do timer
+INTS:	        db		0	; INTERRUPT STATUS: IP x x x . x x IPStec IPStim
+INTE:	        db		0	; INTERRUPT ENABLE: IE x x x . x x IEStec IEStim
+TECST:	        db		0	; Status do teclado
+TECDT:	        db		0	; Dado do teclado
+VISOR:	        dab		[36]	; Portas de acesso ao visor
+
+;	
+;------------------------------------------------------------------------------
+;	Ponto de entrada do RESET do processador
+;------------------------------------------------------------------------------
+org		_KERNEL
+jmp		_RESET
+
+;
+;------------------------------------------------------------------------------
+;	Area do kernel com os vetores das funções do kernel
+;------------------------------------------------------------------------------
+org		_VETTAB
+
+dw		getchar			; BYTE	getchar()
+dw		putchar			; void	putchar(BYTE c, WORD pos)
+dw		putmsg			; void	putmsg(BYTE *msg, WORD pos)
+dw		clr_visor		; void	clr_visor()
+dw		kbhit			; WORD	kbhit()
+dw		get_timer		; WORD	get_timer()
+dw		clr_timer		; void	clr_timer()
+dw		get_timer_on	        ; WORD	get_timer_on()
+dw		set_timer_on	        ; void	set_timer_on(WORD on)
+dw		get_speed		; WORD	get_speed()
+
+		
+;	
+;------------------------------------------------------------------------------
+;	C�digo de RESET (BOOT) do processador/interrup��o
+;------------------------------------------------------------------------------
+	ORG	_RESET
+
+; 1) Desabilitar o sistema de interrup��es
+        CLR     INTE
+
+; 2) Inicializar o stack pointer (SP = R6)
+        MOV     #H7FF0, R6
+
+; 3) Inicializar as vari�veis internas usadas pelo sistema de interrup��es e perif�ricos (IVET, INTE, etc.)
+        MOV 	#_IOAREA08, R0
+
+        MOV     #ISR, IVET
+        CLR     INTS
+
+; 4) Inicializar as vari�veis internas do kernel
+        CLR     speed
+
+; 5) Inicializar o teclado zerando o byte de estado (TECST, endere�o 65498)
+        CLR     TECST
+
+; 6) Inicializar o timer
+        MOV     #5, TIMDT
+
+; 7) Limpar o visor
+        JSR     R7, clr_visor
+
+; 8) Habilitar interrup��es
+        MOV     #ISR, IVET
+        MOV     #H83, INTE
+    
+; 9) Retornar para o programa de aplica��o com um desvio para o endere�o _APP da mem�ria
+        JMP	_APP
+;		
+;------------------------------------------------------------------------------
+; Variáveis
+;------------------------------------------------------------------------------
+speed:          DW      0       ; velocidade do veiculo
+TICKCNT:        DW      0
+TICK:           DW      0
+
+;
+;------------------------------------------------------------------------------
+;	Tratador de interrupções
+;------------------------------------------------------------------------------
+ISR:
+        MOV     R0, -(R6)        ; salva registradores
+        MOV     R1, -(R6)
+        MOV     R2, -(R6)
+        MOV     R3, -(R6)
+        MOV     R4, -(R6)
+        MOV     R5, -(R6)   
+
+		MOV		INTS, R0
+        AND		#1, R0
+		BEQ  	fim_ISR
+
+		AND 	#HFFFD, INTS
+
+		JSR 	R7, ISRtec
+		
+		MOV 	INTS, R0		; Verifica se INT do TIMER
+		AND 	#1, R0
+		BEQ 	fim_ISR
+		JSR 	R7, ISRtim		; Tratamento da INT do TIMER
+		AND 	#HFFFE ,INTS	; Desliga bit de INT TIMER
+
+fim_ISR:
+		MOV		(R6)+, R5
+		MOV		(R6)+, R4	
+		MOV		(R6)+, R3
+		MOV		(R6)+, R2
+		MOV		(R6)+, R1
+		MOV		(R6)+, R0
+		RTI		
+	
+ISRtim:
+
+		ADD 	TIMDT, TICKCNT 
+		CMP 	TICKCNT, #65535
+		BNE 	fim_ISRtim
+		MOV 	#0,TICKCNT
+		JMP 	fim_ISRtim
+
+ISRtec:
+		CMP 	TECDT, #h2b
+		BEQ 	speed_up
+		CMP 	TECDT, #h2d
+		BEQ 	speed_down
+
+		JMP 	fim_ISRtec
+
+speed_up:
+		CLR 	TECST
+	    CLR 	TECDT
+
+		CMP 	#100, speed
+		BEQ 	fim_ISRtec
+
+		ADD 	#1, speed       ; Incrementa a velocidade
+		JMP 	fim_ISRtec
+
+speed_down:
+		CLR 	TECST
+	    CLR 	TECDT
+
+		CMP 	speed, #0
+		BEQ 	fim_ISRtec
+
+		SUB 	#1, speed       ; Decrementa a velocidade
+		JMP 	fim_ISRtec
+
+fim_ISRtec:	
+		RTS 	R7
+
+fim_ISRtim:
+ 		MOV  	#H0, INTS
+
+		RTS 	R7
+
+;------------------------------------------------------------------------------
+; BYTE	getchar()
+;------------------------------------------------------------------------------
+getchar:		
+
+		JSR 	R7, KBHIT
+
+        CMP     R0, #0   ; Carrega o estado do teclado em R0
+		BNE		getchar
+
+        MOV     TECDT, R0      ; Retorna a tecla digitada no registrador R0
+
+        RTS     r7   
+
+;		
+;------------------------------------------------------------------------------
+; void	putchar(BYTE c, WORD pos)
+;------------------------------------------------------------------------------
+
+putchar:
+		CMP     R5, #H20
+		BLT     __end
+
+		CMP     R5, #H7A
+		BGT     __end
+
+		CMP     R4, #0
+		BLT     __end
+
+		CMP     R4, #35
+		BGT     __end
+
+		MOV     R5, VISOR(R4)   ; Move o caractere lido para o visor na posição apontada por R4
+    
+        __end:
+	        RTS	R7
+
+;		
+;------------------------------------------------------------------------------
+; void	putmsg(BYTE *msg, WORD pos)
+;------------------------------------------------------------------------------
+putmsg:
+		AND  #3, INTE
+		DEC  R5	
+		ADD #65500, R4
+
+putmsg_2:
+		CMP  R4, #65535
+		BGT  fimputsmg 
+
+		CMP  R4, #65500
+		BLT  fimputsmg 
+
+		CMP R5, #H00
+		BEQ  fimputsmg
+
+		MOV  (R5), (R4)
+		INC  R5
+		INC  R4
+
+		CMP  (R5), #0
+		BNE  putmsg_2
+		JMP  fimputsmg
+		
+fimputsmg:
+		mov #0, r4
+		mov #0, r5
+		rts		r7
+
+;		
+;------------------------------------------------------------------------------
+; void	clr_visor()
+;------------------------------------------------------------------------------
+; clr_visor:
+; 		mov #VISOR, r3
+; limparvisor:
+; 		mov #95, (r3)
+; 		inc r3
+; 		cmp r3, #hffff
+; 		bne limparvisor
+; 		clr r3
+; 		rts		r7
+; ;		
+
+clr_visor:
+
+        MOV     R0, -(R6)    ; Salva R0 na pilha
+        MOV     R1, -(R6)    ; Salva R1 na pilha
+        MOV     #VISOR, R1   ; Move endereço do visor para R1
+        MOV     #36, R0      ; Move 36 para o contador
+
+    __OUTRO_LED:
+                CLR     (R1)            ; Limpa 1 LED do Visor
+                INC     R1              ; Aponta para o LED seguinte
+                SOB     R0, __OUTRO_LED ; Subtrai 1 do contador
+                                        ; se <> 0, repete o laço
+        
+        MOV     (R6)+, R1   ; Restaura R1
+        MOV     (R6)+, R0   ; Restaura R0
+
+        RTS     R7
+		
+;------------------------------------------------------------------------------
+; WORD	kbhit()
+;------------------------------------------------------------------------------
+; kbhit:
+
+; 		cmp TECST, #h80		;if(TECST != h80)
+; 		beq teclafoi		;r0 = 1;
+; 		mov #1, r0		
+; 		rts		r7	
+; teclafoi:
+; 		mov #0, r0		;else
+; 		clr TECST		;r0 = 0;
+; 		rts		r7
+kbhit:
+
+        CMP     TECST, #H80 
+
+        ; BNE     __hit           ; Se há tecla, subrotina __hit
+        BEQ     __hit        ; Se não há tecla, subrotina __nothit
+		MOV         #1, R0  ; Se não há tecla, o valor em R0 será um valor qualquer diferente de zero
+        
+		RTS	R7              ; Retorna ao programa principal
+
+        __hit:
+            MOV         #0, R0  ; Se há tecla, o valor em R0 deverá ser zero
+            CLR 		TECST
+            RTS 		R7              ; Retorna ao ponto de chamada
+        
+        __nothit:
+            MOV         #1, R0  ; Se não há tecla, o valor em R0 será um valor qualquer diferente de zero
+            
+            RTS R7              ; Retorna ao ponto de chamada
+
+;		
+;------------------------------------------------------------------------------
+; WORD	get_timer()
+; 
+; A aplicação chama essa função sempre que desejar saber qual é o valor atual 
+; do timer. O valor retornado representa o tempo em milissegundos.
+;   - Parâmetro de saída: registrador R0, com a informação do valor atual 
+;   do timer.
+;------------------------------------------------------------------------------
+get_timer:
+
+    MOV     TICKCNT, R0      ; Retorna o valor do timer em R0
+        
+	RTS     R7
+
+;		
+;------------------------------------------------------------------------------
+; void	clr_timer()
+;------------------------------------------------------------------------------
+clr_timer:
+
+	MOV     #0, TICKCNT
+	
+	RTS     R7
+
+;		
+;------------------------------------------------------------------------------
+; WORD	get_timer_on()
+;
+; A aplicação chama essa função sempre que desejar saber se o timer está 
+; parado ou avançando.
+;   - Parâmetro de saída: registrador R0, com a informação sobre o estado atual 
+;   do timer (PARADO / AVANÇANDO).
+; Se o timer estiver PARADO, deve ser retornado o valor 0 (zero). Se o timer 
+; estiver avançando, deve ser retornado um valor diferente de 0 (zero).
+;------------------------------------------------------------------------------
+get_timer_on:
+
+	MOV 	#1, R0
+	AND 	INTE, R0
+
+	RTS		R7
+
+;		
+;------------------------------------------------------------------------------
+; void	set_timer_on(WORD on)
+; 
+; A aplicação chama essa função sempre que desejar definir o estado do timer. 
+; Esse estado pode ser PARADO ou AVANÇANDO.
+;   - Parâmetros de entrada: Registrador R5, com o estado a ser colocado 
+;   no timer
+; Se o valor de R5 for 0 (zero), o timer deve ser PARADO. Se o valor de R5 for 
+; diferente de zero, o timer deve passar para o estado AVANÇANDO.
+;------------------------------------------------------------------------------
+set_timer_on:
+		TST		R5
+
+		BNE 	__set_parado
+
+		OR #1,INTE
+		JMP __set_avanca
+
+		__set_parado:
+				AND #H82, INTE
+				RTS     R7
+		
+		__set_avanca:
+				AND #H83, INTE
+				RTS     R7
+	
+	RTS     R7
+
+;		
+;------------------------------------------------------------------------------
+; WORD	get_speed()
+; 
+; A aplicação chama essa função para obter informações sobre a velocidade de 
+; deslocamento do veículo controlado pelo programa.
+;       - Parâmetro de saída: registrador R0, com a informação atual 
+;       da velocidade.
+; O valor retornado pode ser qualquer número entre 0 (zero) e 100, e representa 
+; a velocidade em metros por segundo.
+; A informação retornada por essa função representa o valor da velocidade 
+; controlado pelo usuário, através das teclas “+” e “-“.
+;
+; ASCII: (+) H2B, (-), H2D
+;------------------------------------------------------------------------------
+get_speed:
+
+		mov speed, r0	
+
+        RTS     R7
