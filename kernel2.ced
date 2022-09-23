@@ -1,6 +1,7 @@
 ;******************************************************************************
 ;
 ;	CESAR16i Kernel
+;	Versão 2
 ;	Leonardo Azzi Martins, 2022/2
 ;
 ;******************************************************************************
@@ -12,11 +13,11 @@
 ;
 ;	0100 - 01FF		_VETTAB
 ;					Tabela com os vetores das funções do kernel
-;					*** CUIDADO! Esse vetor est� no meio da �rea de c�digo ***
+;					*** CUIDADO! Esse vetor está no meio da área de código ***
 ;
 ;	8000 - FF7F		_APP
-;					�rea onde ser� colocado o programa de aplica��o.
-;					Esse programa vai fazer o acesso aos perif�ricos e interrup��es, atrav�s das fun��es do Kernel.
+;					Área onde será colocado o programa de aplicação.
+;					Esse programa vai fazer o acesso aos periféricos e interrupções, através das funções do Kernel.
 ;
 ;	FF80 - FFBF 	_IOAREA16
 ;					Area de perifericos, acessada na base 16 bits
@@ -26,7 +27,6 @@
 ;					
 ;******************************************************************************
 
-
 _KERNEL:	equ	h0000
 _VETTAB:	equ	h0100
 _RESET:		equ	_VETTAB+H0100
@@ -34,10 +34,9 @@ _APP:		equ	h8000
 _IOAREA16:	equ	hFF80
 _IOAREA08:	equ	hFFC0
 
-
 ;
 ;------------------------------------------------------------------------------
-;	�rea reservada para os perif�ricos
+;	Área reservada para os periféricos
 ;------------------------------------------------------------------------------
 
 ; Acesso em 16 bits
@@ -48,11 +47,11 @@ IVET:	        dw		0	; Vetor de interrupção
 ; Acesso em 8 bits
 org		_IOAREA08
 dab		[23]
-TIMDT:	        db		0	; Registro de programação do timer
-INTS:	        db		0	; INTERRUPT STATUS: IP x x x . x x IPStec IPStim
-INTE:	        db		0	; INTERRUPT ENABLE: IE x x x . x x IEStec IEStim
-TECST:	        db		0	; Status do teclado
-TECDT:	        db		0	; Dado do teclado
+TIMDT:	        db		0		; Registro de programação do timer
+INTS:	        db		0		; INTERRUPT STATUS: IP x x x . x x IPStec IPStim
+INTE:	        db		0		; INTERRUPT ENABLE: IE x x x . x x IEStec IEStim
+TECST:	        db		0		; Status do teclado
+TECDT:	        db		0		; Dado do teclado
 VISOR:	        dab		[36]	; Portas de acesso ao visor
 
 ;	
@@ -78,30 +77,29 @@ dw		clr_timer		; void	clr_timer()
 dw		get_timer_on	        ; WORD	get_timer_on()
 dw		set_timer_on	        ; void	set_timer_on(WORD on)
 dw		get_speed		; WORD	get_speed()
-
 		
 ;	
 ;------------------------------------------------------------------------------
 ;	C�digo de RESET (BOOT) do processador/interrup��o
 ;------------------------------------------------------------------------------
-	ORG	_RESET
+ORG	_RESET
 
-; 1) Desabilitar o sistema de interrup��es
-        CLR     INTE
+; 1) Desabilitar o sistema de interrupções
+    	CLR     INTE
 
 ; 2) Inicializar o stack pointer (SP = R6)
         MOV     #H7FF0, R6
 
-; 3) Inicializar as vari�veis internas usadas pelo sistema de interrup��es e perif�ricos (IVET, INTE, etc.)
+; 3) Inicializar as variáveis internas usadas pelo sistema de interrupções e periféricos (IVET, INTE, etc.)
         MOV 	#_IOAREA08, R0
 
         MOV     #ISR, IVET
         CLR     INTS
 
-; 4) Inicializar as vari�veis internas do kernel
+; 4) Inicializar as variáveis internas do kernel
         CLR     speed
 
-; 5) Inicializar o teclado zerando o byte de estado (TECST, endere�o 65498)
+; 5) Inicializar o teclado zerando o byte de estado (TECST, endereço 65498)
         CLR     TECST
 
 ; 6) Inicializar o timer
@@ -110,12 +108,12 @@ dw		get_speed		; WORD	get_speed()
 ; 7) Limpar o visor
         JSR     R7, clr_visor
 
-; 8) Habilitar interrup��es
+; 8) Habilitar interrupções
         MOV     #ISR, IVET
         MOV     #H83, INTE
     
-; 9) Retornar para o programa de aplica��o com um desvio para o endere�o _APP da mem�ria
-        JMP	_APP
+; 9) Retornar para o programa de aplicação com um desvio para o endereço _APP da memória
+        JMP		_APP
 ;		
 ;------------------------------------------------------------------------------
 ; Variáveis
@@ -243,34 +241,43 @@ putchar:
 ;		
 ;------------------------------------------------------------------------------
 ; void	putmsg(BYTE *msg, WORD pos)
+; Entrada: 
+; 	- R4: Cursor
+;	- R5: Caractere
 ;------------------------------------------------------------------------------
 putmsg:
-		AND  #3, INTE
-		DEC  R5	
-		ADD #65500, R4
+		; AND  	#3, INTE	; O que é INTE?
+		DEC  	R5			; Diminui R5?
+		ADD 	#65500, R4	; Posição relativa no visor
 
 putmsg_2:
-		CMP  R4, #65535
-		BGT  fimputsmg 
+		CMP  	R4, #65535	; Tamanho do visor
+		BGT  	fimputsmg 	; Se ultrapassar o fim do visor
 
-		CMP  R4, #65500
-		BLT  fimputsmg 
+		CMP  	R4, #65500	; Início do visor
+		BLT  	fimputsmg	; Se for menor que o início do visor
 
-		CMP R5, #H00
-		BEQ  fimputsmg
+		CMP		(R5), #H20	; Se o caractere for menor que H20 ("SPACE")
+		BLT		pula		; Não escreve
+		; CMP		(R5), #H7A	; Se o caractere for maior que H7A ("z")
+		; BGT		pula		; Não escreve
 
-		MOV  (R5), (R4)
-		INC  R5
-		INC  R4
+		MOV  	(R5), (R4)	; Coloca o caractere na posição apontada pelo cursor
 
-		CMP  (R5), #0
-		BNE  putmsg_2
-		JMP  fimputsmg
-		
+pula:
+		NOP
+		INC  	R5			; Vai para o próximo caractere
+		INC  	R4			; Vai para a próxima posição do cursor
+
+		CMP  	(R5), #H00
+		BNE  	putmsg_2	; Se R5 ainda tiver conteúdo, retoma o laço
+		JMP  	fimputsmg	; 	Se for igual a zero, finaliza
+	
+
 fimputsmg:
-		mov #0, r4
-		mov #0, r5
-		rts		r7
+		MOV 	#0, R4
+		MOV 	#0, R5
+		RTS		R7
 
 ;		
 ;------------------------------------------------------------------------------
